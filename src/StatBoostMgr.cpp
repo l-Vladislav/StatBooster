@@ -1,4 +1,9 @@
 #include "StatBoostMgr.h"
+#include "StatBoostCfgMgr.h"
+#include "WorldPacket.h"
+#include "DBCStores.h"
+
+static constexpr char STATBOOST_ADDON_PREFIX[] = "StatBoost";
 
 StatBoostMgr::StatType StatBoostMgr::GetStatTypeFromSubClass(Item* item)
 {
@@ -484,8 +489,17 @@ bool StatBoostMgr::BoostItem(Player* player, Item* item, uint32 chance)
         LOG_INFO("module", ">> Trying to get enchant with role mask {}, class {}, subClass {}, itemType {}, and itemlevel {} from pool.", statType, itemClassMask, itemSubClassMask, itemTypeMask, itemLevel);
     }
 
+    // Determine item class filter: 2=weapon, 4=armor, 6=shield
+    uint32 itemClassFilter = 0;
+    if (itemClass == ITEM_CLASS_WEAPON)
+        itemClassFilter = 2;
+    else if (itemClass == ITEM_CLASS_ARMOR && itemSubClass == ITEM_SUBCLASS_ARMOR_SHIELD)
+        itemClassFilter = 6;
+    else if (itemClass == ITEM_CLASS_ARMOR)
+        itemClassFilter = 4;
+
     //Fetch an enchant from the enchant pool.
-    auto enchant = sBoostConfigMgr->EnchantPool.Get(statType, itemClassMask, itemSubClassMask, itemTypeMask, itemLevel);
+    auto enchant = sBoostConfigMgr->EnchantPool.Get(statType, itemClassMask, itemSubClassMask, itemTypeMask, itemLevel, itemClassFilter);
 
     //Failed to find a valid enchant.
     if (!enchant)
@@ -503,22 +517,7 @@ bool StatBoostMgr::BoostItem(Player* player, Item* item, uint32 chance)
         LOG_INFO("module", "Passed Enchant Check. Enchant({})", enchant->Id);
     }
 
-    if (itemClass != ITEM_CLASS_WEAPON)
-    {
-        return EnchantItem(player, item, TEMP_ENCHANTMENT_SLOT, enchant->Id, sBoostConfigMgr->OverwriteEnchantEnable);
-    }
-    else
-    {
-        EnchantmentSlot enchantSlot = GetFreeSocketSlotForItem(item);
-
-        if (enchantSlot != MAX_ENCHANTMENT_SLOT)
-        {
-            return EnchantItem(player, item, enchantSlot, enchant->Id, sBoostConfigMgr->OverwriteEnchantEnable) &&
-                EnchantItem(player, item, PRISMATIC_ENCHANTMENT_SLOT, StatBoostMgr::ENCHANT_DUMMY, sBoostConfigMgr->OverwriteEnchantEnable);
-        }
-    }
-
-    return false;
+    return EnchantItem(player, item, PROP_ENCHANTMENT_SLOT_4, enchant->Id, sBoostConfigMgr->OverwriteEnchantEnable);
 }
 
 EnchantmentSlot StatBoostMgr::GetFreeSocketSlotForItem(Item* item)
@@ -554,10 +553,70 @@ bool StatBoostMgr::IsEquipment(Item* item)
     return true;
 }
 
+bool StatBoostMgr::BoostItemFromPool(Player* player, Item* item, uint32 poolGroup)
+{
+    if (!item || !player)
+        return false;
+
+    if (!IsEquipment(item))
+        return false;
+
+    uint32 itemLevel = item->GetTemplate()->ItemLevel;
+    uint32 itemClass = item->GetTemplate()->Class;
+    uint32 itemSubClass = item->GetTemplate()->SubClass;
+
+    // Filter by gear type: weapon/armor/shield
+    // 2 = weapon, 4 = armor (non-shield), 6 = shield
+    uint32 itemClassFilter = 0;
+    if (itemClass == ITEM_CLASS_WEAPON)
+        itemClassFilter = 2;
+    else if (itemClass == ITEM_CLASS_ARMOR && itemSubClass == ITEM_SUBCLASS_ARMOR_SHIELD)
+        itemClassFilter = 6;
+    else if (itemClass == ITEM_CLASS_ARMOR)
+        itemClassFilter = 4;
+
+    // Compute inventory type bitmask for slot-specific filtering
+    uint32 itemTypeBit = 1 << item->GetTemplate()->InventoryType;
+
+    // No role filtering — the scroll's pool determines what enchants can roll
+    auto enchant = sBoostConfigMgr->EnchantPool.GetFromPool(poolGroup, itemLevel, itemClassFilter, 0, itemTypeBit);
+
+    if (!enchant)
+    {
+        if (sBoostConfigMgr->VerboseEnable)
+        {
+            LOG_INFO("module", "[StatBooster] No enchant found in pool {} for iLvl={}, class={}", poolGroup, itemLevel, itemClass);
+            if (player)
+                ChatHandler(player->GetSession()).SendSysMessage(
+                    Acore::StringFormat("[DEBUG] No enchant in pool {} for iLvl={} class={}", poolGroup, itemLevel, itemClass).c_str());
+        }
+        return false;
+    }
+
+    if (sBoostConfigMgr->VerboseEnable)
+    {
+        LOG_INFO("module", "[StatBooster] Pool {} selected enchant {} for iLvl={}", poolGroup, enchant->Id, itemLevel);
+        if (player)
+            ChatHandler(player->GetSession()).SendSysMessage(
+                Acore::StringFormat("[DEBUG] Pool {} selected enchant {} for iLvl={}", poolGroup, enchant->Id, itemLevel).c_str());
+    }
+
+    return EnchantItem(player, item, PROP_ENCHANTMENT_SLOT_4, enchant->Id, sBoostConfigMgr->OverwriteEnchantEnable);
+}
+
 bool StatBoostMgr::EnchantItem(Player* player, Item* item, EnchantmentSlot slot, uint32 enchantId, bool overwrite)
 {
     if (item->GetEnchantmentId(slot) && !overwrite)
     {
+        if (sBoostConfigMgr->VerboseEnable)
+        {
+            LOG_INFO("module", "[StatBooster] EnchantItem BLOCKED: slot {} already has enchant {}, overwrite={}",
+                (uint32)slot, item->GetEnchantmentId(slot), overwrite);
+            if (player)
+                ChatHandler(player->GetSession()).SendSysMessage(
+                    Acore::StringFormat("[DEBUG] EnchantItem BLOCKED: slot={} existing={} overwrite={}",
+                        (uint32)slot, item->GetEnchantmentId(slot), overwrite).c_str());
+        }
         return false;
     }
 
@@ -567,5 +626,151 @@ bool StatBoostMgr::EnchantItem(Player* player, Item* item, EnchantmentSlot slot,
 
     item->SetFlag(ITEM_FIELD_FLAGS, ITEM_FIELD_FLAG_UNK26);
 
+    if (sBoostConfigMgr->VerboseEnable && player)
+        ChatHandler(player->GetSession()).SendSysMessage(
+            Acore::StringFormat("[DEBUG] EnchantItem OK: slot={} enchant={} applied to {}",
+                (uint32)slot, enchantId, item->GetTemplate()->Name1).c_str());
+
+    // Notify addon about the boost
+    if (slot == PROP_ENCHANTMENT_SLOT_4 && player)
+        SendBoostDataToAddon(player, item->GetTemplate()->ItemId, enchantId);
+
     return true;
+}
+
+void StatBoostMgr::SendBoostDataToAddon(Player* player, uint32 itemEntry, uint32 enchantId)
+{
+    if (!player || !player->GetSession())
+        return;
+
+    std::string payload = Acore::StringFormat("BOOST:{}:{}", itemEntry, enchantId);
+    std::string fullMessage = std::string(STATBOOST_ADDON_PREFIX) + "\t" + payload;
+
+    WorldPacket data(SMSG_MESSAGECHAT, 100);
+    data << uint8(ChatMsg::CHAT_MSG_WHISPER);
+    data << int32(LANG_ADDON);
+    data << player->GetGUID();
+    data << uint32(0);
+    data << player->GetGUID();
+    data << uint32(fullMessage.length() + 1);
+    data << fullMessage;
+    data << uint8(0);
+
+    player->GetSession()->SendPacket(&data);
+}
+
+void StatBoostMgr::SendAllBoostDataOnLogin(Player* player)
+{
+    if (!player || !player->GetSession())
+        return;
+
+    // Send EQUIP messages for all equipped boosted items
+    for (uint8 slot = EQUIPMENT_SLOT_START; slot < EQUIPMENT_SLOT_END; ++slot)
+    {
+        Item* item = player->GetItemByPos(INVENTORY_SLOT_BAG_0, slot);
+        if (!item || !IsBoosted(item))
+            continue;
+
+        uint32 enchantId = item->GetEnchantmentId(PROP_ENCHANTMENT_SLOT_4);
+        if (!enchantId)
+            continue;
+
+        uint32 itemEntry = item->GetTemplate()->ItemId;
+        std::string payload = Acore::StringFormat("EQUIP:{}:{}:{}", slot, itemEntry, enchantId);
+        std::string fullMessage = std::string(STATBOOST_ADDON_PREFIX) + "\t" + payload;
+
+        WorldPacket data(SMSG_MESSAGECHAT, 100);
+        data << uint8(ChatMsg::CHAT_MSG_WHISPER);
+        data << int32(LANG_ADDON);
+        data << player->GetGUID();
+        data << uint32(0);
+        data << player->GetGUID();
+        data << uint32(fullMessage.length() + 1);
+        data << fullMessage;
+        data << uint8(0);
+
+        player->GetSession()->SendPacket(&data);
+    }
+}
+
+void StatBoostMgr::SendPoolSyncToAddon(Player* player)
+{
+    if (!player || !player->GetSession())
+        return;
+
+    const auto& allEnchants = sBoostConfigMgr->EnchantPool.GetAll();
+    if (allEnchants.empty())
+        return;
+
+    // Build chunked messages: "SYNC:id,pool,min,max,mask,cf;id,pool,..."
+    // WoW 3.3.5a may truncate large addon messages, keep chunks small
+    static constexpr size_t MAX_CHUNK = 220;
+    std::string chunk;
+    uint32 count = 0;
+
+    auto sendChunk = [&]()
+    {
+        if (chunk.empty())
+            return;
+        std::string fullMessage = std::string(STATBOOST_ADDON_PREFIX)
+            + "\t" + "SYNC:" + chunk;
+
+        WorldPacket data(SMSG_MESSAGECHAT, fullMessage.length() + 50);
+        data << uint8(ChatMsg::CHAT_MSG_WHISPER);
+        data << int32(LANG_ADDON);
+        data << player->GetGUID();
+        data << uint32(0);
+        data << player->GetGUID();
+        data << uint32(fullMessage.length() + 1);
+        data << fullMessage;
+        data << uint8(0);
+
+        player->GetSession()->SendPacket(&data);
+        chunk.clear();
+    };
+
+    for (const auto& e : allEnchants)
+    {
+        if (e.PoolGroup == 0)
+            continue;
+
+        std::string entry = Acore::StringFormat(
+            "{},{},{},{},{},{}",
+            e.Id, e.PoolGroup, e.ILvlMin, e.ILvlMax,
+            e.ItemTypeMask, e.ItemClassFilter);
+
+        if (!chunk.empty())
+        {
+            if (chunk.length() + 1 + entry.length() > MAX_CHUNK)
+                sendChunk();
+            else
+                chunk += ";";
+        }
+        chunk += entry;
+        count++;
+    }
+
+    sendChunk();
+
+    // Send end marker
+    {
+        std::string fullMessage = std::string(STATBOOST_ADDON_PREFIX)
+            + "\t" + "SYNC_END";
+
+        WorldPacket data(SMSG_MESSAGECHAT, fullMessage.length() + 50);
+        data << uint8(ChatMsg::CHAT_MSG_WHISPER);
+        data << int32(LANG_ADDON);
+        data << player->GetGUID();
+        data << uint32(0);
+        data << player->GetGUID();
+        data << uint32(fullMessage.length() + 1);
+        data << fullMessage;
+        data << uint8(0);
+
+        player->GetSession()->SendPacket(&data);
+    }
+
+    if (sBoostConfigMgr->VerboseEnable)
+        LOG_INFO("module", "[StatBooster] Sent {} pool entries to addon for {}",
+            count, player->GetName());
 }

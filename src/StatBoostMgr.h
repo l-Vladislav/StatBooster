@@ -7,6 +7,7 @@ class StatBoostMgr
 {
 public:
     static bool BoostItem(Player* player, Item* item, uint32 chance);
+    static bool BoostItemFromPool(Player* player, Item* item, uint32 poolGroup);
     static bool IsBoosted(Item* item);
     static void MakeSoulbound(Item* item, Player* player);
 
@@ -34,6 +35,11 @@ private:
     static StatType ScoreItem(Item* item, bool hasAdditionalSpells = false);
     static StatType AnalyzeItem(Item* item);
     static bool IsEquipment(Item* item);
+
+public:
+    static void SendBoostDataToAddon(Player* player, uint32 itemEntry, uint32 enchantId);
+    static void SendAllBoostDataOnLogin(Player* player);
+    static void SendPoolSyncToAddon(Player* player);
 };
 
 #endif

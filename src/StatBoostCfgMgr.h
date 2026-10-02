@@ -15,6 +15,8 @@ struct EnchantDefinition
     uint32 ClassMask;
     uint32 SubClassMask;
     uint32 ItemTypeMask;
+    uint32 PoolGroup;
+    uint32 ItemClassFilter; // 0=any, 2=weapon, 4=armor, 6=shield(armor+subclass6)
 };
 
 class StatBoosterConfig
@@ -56,9 +58,11 @@ public:
     {
     public:
         void Add(EnchantDefinition definition);
-        EnchantDefinition* Get(uint32 roleMask, uint32 classMask, uint32 subClassMask, uint32 itemTypeMask, uint32 itemLevel);
+        EnchantDefinition* Get(uint32 roleMask, uint32 classMask, uint32 subClassMask, uint32 itemTypeMask, uint32 itemLevel, uint32 itemClassFilter = 0);
+        EnchantDefinition* GetFromPool(uint32 poolGroup, uint32 itemLevel, uint32 itemClassFilter = 0, uint32 roleMask = 0, uint32 itemTypeBit = 0);
         bool Load();
         void Clear();
+        const std::vector<EnchantDefinition>& GetAll() const { return pool; }
 
     private:
         std::vector<EnchantDefinition> pool;

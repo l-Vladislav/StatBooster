@@ -110,7 +110,7 @@ void StatBoosterConfig::EnchantPool::Add(EnchantDefinition definition)
     pool.push_back(definition);
 }
 
-EnchantDefinition* StatBoosterConfig::EnchantPool::Get(uint32 roleMask, uint32 classMask, uint32 subClassMask, uint32 itemTypeMask, uint32 itemLevel)
+EnchantDefinition* StatBoosterConfig::EnchantPool::Get(uint32 roleMask, uint32 classMask, uint32 subClassMask, uint32 itemTypeMask, uint32 itemLevel, uint32 itemClassFilter)
 {
     std::shuffle(std::begin(pool), std::end(pool), randomEngine);
 
@@ -120,7 +120,38 @@ EnchantDefinition* StatBoosterConfig::EnchantPool::Get(uint32 roleMask, uint32 c
                 ((data.ClassMask & classMask) == classMask || data.ClassMask == 0) &&
                 ((data.SubClassMask & subClassMask) == subClassMask || data.SubClassMask == 0) &&
                 ((data.ItemTypeMask & itemTypeMask) == itemTypeMask || data.ItemTypeMask == 0) &&
-                (itemLevel >= data.ILvlMin && itemLevel <= data.ILvlMax);
+                (itemLevel >= data.ILvlMin && itemLevel <= data.ILvlMax) &&
+                (itemClassFilter == 0 || data.ItemClassFilter == 0 || data.ItemClassFilter == itemClassFilter);
+    });
+
+    if (!(iterator == pool.end()))
+    {
+        return &(*iterator);
+    }
+
+    return 0;
+}
+
+EnchantDefinition* StatBoosterConfig::EnchantPool::GetFromPool(uint32 poolGroup, uint32 itemLevel, uint32 itemClassFilter, uint32 roleMask, uint32 itemTypeBit)
+{
+    std::shuffle(std::begin(pool), std::end(pool), randomEngine);
+
+    auto iterator = std::find_if(pool.begin(), pool.end(), [&](const EnchantDefinition& data)
+    {
+        if (data.PoolGroup != poolGroup)
+            return false;
+        if (itemLevel < data.ILvlMin || itemLevel > data.ILvlMax)
+            return false;
+        // Filter by item class: 0=any, otherwise must match
+        if (itemClassFilter > 0 && data.ItemClassFilter > 0 && data.ItemClassFilter != itemClassFilter)
+            return false;
+        // Filter by role: 0=any role matches, otherwise check bitmask
+        if (roleMask > 0 && data.RoleMask > 0 && (data.RoleMask & roleMask) == 0)
+            return false;
+        // Filter by inventory slot: 0=any slot, otherwise check bitmask
+        if (itemTypeBit > 0 && data.ItemTypeMask > 0 && (data.ItemTypeMask & itemTypeBit) == 0)
+            return false;
+        return true;
     });
 
     if (!(iterator == pool.end()))
@@ -137,7 +168,7 @@ bool StatBoosterConfig::EnchantPool::Load()
     {
         uint32 enchantCount = 0;
 
-        QueryResult qResult = WorldDatabase.Query("SELECT `Id`, `iLvlMin`, `iLvlMax`, `RoleMask`, `ClassMask`, `SubClassMask`, `ItemTypeMask` FROM `statbooster_enchant_template`");
+        QueryResult qResult = WorldDatabase.Query("SELECT `Id`, `iLvlMin`, `iLvlMax`, `RoleMask`, `ClassMask`, `SubClassMask`, `ItemTypeMask`, IFNULL(`PoolGroup`, 0), IFNULL(`ItemClassFilter`, 0) FROM `statbooster_enchant_template`");
 
         if (!qResult)
         {
@@ -162,6 +193,8 @@ bool StatBoosterConfig::EnchantPool::Load()
             enchantDef.ClassMask = fields[4].Get<uint32>();
             enchantDef.SubClassMask = fields[5].Get<uint32>();
             enchantDef.ItemTypeMask = fields[6].Get<uint32>();
+            enchantDef.PoolGroup = fields[7].Get<uint32>();
+            enchantDef.ItemClassFilter = fields[8].Get<uint32>();
 
             enchantCount++;
             sBoostConfigMgr->EnchantPool.Add(enchantDef);

@@ -1,0 +1,7 @@
+## Interface: 30300
+## Title: StatBoost Tooltip
+## Notes: Highlights StatBooster enchants in item tooltips
+## Author: Custom
+## Version: 1.0
+## SavedVariables: StatBoostTooltipDB
+StatBoostTooltip.lua

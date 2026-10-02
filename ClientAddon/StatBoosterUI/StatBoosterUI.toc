@@ -1,0 +1,10 @@
+## Interface: 30300
+## Title: StatBooster UI
+## Notes: Enchant preview interface for StatBooster scrolls
+## Author: Custom
+## Version: 1.0
+## SavedVariables: StatBoosterUI_Settings
+
+EnchantDB.lua
+StatBoosterUI.lua
+SpellbookTab.lua
